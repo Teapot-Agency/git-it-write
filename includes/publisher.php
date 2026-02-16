@@ -39,6 +39,10 @@ class GIW_Publisher{
 
     public $allowed_file_types = array();
 
+    public $exclude_folders = array();
+
+    public $language = '';
+
     public function __construct( GIW_Repository $repository, $repo_config ){
 
         $this->repository = $repository;
@@ -47,6 +51,8 @@ class GIW_Publisher{
         $this->folder = $repo_config[ 'folder' ];
         $this->post_author = $repo_config[ 'post_author' ];
         $this->content_template = $repo_config[ 'content_template' ];
+        $this->exclude_folders = array_filter( array_map( 'trim', explode( ',', $repo_config[ 'exclude_folders' ] ?? '' ) ) );
+        $this->language = trim( $repo_config[ 'language' ] ?? '' );
 
         $this->uploaded_images = GIW_Utils::get_uploaded_images();
 
@@ -100,7 +106,7 @@ class GIW_Publisher{
 
     public function create_post( $post_id, $item_slug, $item_props, $parent ){
 
-        GIW_Utils::log( sprintf( '---------- Checking post [%s] under parent [%s] ----------', $post_id, $parent ) );
+        GIW_Utils::log( sprintf( '---------- Checking post [%s] slug [%s] under parent [%s] ----------', $post_id, $item_slug, $parent ) );
 
         // If post exists, check if it has changed and proceed further
         if( $post_id && $item_props ){
@@ -124,7 +130,7 @@ class GIW_Publisher{
 
             // Some error in getting the item content
             if( !$item_content ){
-                GIW_Utils::log( 'Cannot retrieve post content, skipping this' );
+                GIW_Utils::log( 'Cannot retrieve post content for [' . $item_slug . '] URL [' . $item_props[ 'raw_url' ] . '], skipping this' );
                 $this->stats[ 'posts' ][ 'failed' ]++;
                 return false;
             }
@@ -210,11 +216,26 @@ class GIW_Publisher{
             'meta_input' => $meta_input
         );
 
+        // Switch WPML language context before inserting the post
+        $switched_lang = false;
+        if( !empty( $this->language ) && function_exists( 'icl_get_current_language' ) ){
+            $current_lang = icl_get_current_language();
+            if( $current_lang !== $this->language ){
+                do_action( 'wpml_switch_language', $this->language );
+                $switched_lang = true;
+                GIW_Utils::log( 'Switched WPML language to [' . $this->language . ']' );
+            }
+        }
+
         $new_post_id = wp_insert_post( $post_details );
 
         if( is_wp_error( $new_post_id ) || empty( $new_post_id ) ){
-            GIW_Utils::log( 'Failed to publish post - ' . $new_post_id );
+            $error_msg = is_wp_error( $new_post_id ) ? $new_post_id->get_error_message() : 'empty post ID';
+            GIW_Utils::log( 'Failed to publish post [' . $item_slug . '] - ' . $error_msg );
             $this->stats[ 'posts' ][ 'failed' ]++;
+            if( $switched_lang ){
+                do_action( 'wpml_switch_language', $current_lang );
+            }
             return false;
         }else{
             GIW_Utils::log( '---------- Published post: ' . $new_post_id . ' ----------' );
@@ -230,7 +251,7 @@ class GIW_Publisher{
 
                     $set_tax = wp_set_object_terms( $new_post_id, $terms, $tax_name );
                     if( is_wp_error( $set_tax ) ){
-                        GIW_Utils::log( 'Failed to set taxonomy [' . $set_tax->get_error_message() . ']' );
+                        GIW_Utils::log( 'Failed to set taxonomy [' . $tax_name . '] on post [' . $item_slug . '] - ' . $set_tax->get_error_message() );
                     }
                 }
             }
@@ -245,11 +266,102 @@ class GIW_Publisher{
                 unstick_post( $new_post_id );
             }
 
+            // WPML: Set language and link translations
+            $this->set_wpml_language( $new_post_id, $custom_fields );
+
+            // Restore WPML language context if it was switched
+            if( $switched_lang ){
+                do_action( 'wpml_switch_language', $current_lang );
+            }
+
             $stat_key = $new_post_id == $post_id ? 'updated' : 'new';
             $this->stats[ 'posts' ][ $stat_key ][ $new_post_id ] = get_post_permalink( $new_post_id );
 
             return $new_post_id;
         }
+
+    }
+
+    /**
+     * Set WPML language for a post and link it to its translation group.
+     *
+     * Uses the _translation_group and _translation_lang custom fields from
+     * the article front matter to find the original post and link them as
+     * translations via WPML's wpml_set_element_language_details action.
+     *
+     * @param int   $post_id       The newly created/updated post ID.
+     * @param array $custom_fields The custom_fields from front matter.
+     */
+    public function set_wpml_language( $post_id, $custom_fields ){
+
+        if( empty( $this->language ) || !function_exists( 'icl_get_current_language' ) ){
+            return;
+        }
+
+        $element_type = 'post_' . $this->post_type;
+        $translation_group = isset( $custom_fields[ '_translation_group' ] ) ? $custom_fields[ '_translation_group' ] : '';
+        $translation_lang = !empty( $this->language ) ? $this->language : ( isset( $custom_fields[ '_translation_lang' ] ) ? $custom_fields[ '_translation_lang' ] : '' );
+
+        if( empty( $translation_lang ) ){
+            return;
+        }
+
+        // Get the default WPML language
+        $default_lang = apply_filters( 'wpml_default_language', null );
+
+        // Determine the trid (translation group ID) for linking
+        $trid = null;
+        $source_lang = null;
+
+        if( !empty( $translation_group ) && $translation_lang !== $default_lang ){
+            // This is a translation — try to find the original post by _translation_group
+            $original_posts = get_posts( array(
+                'post_type' => $this->post_type,
+                'posts_per_page' => 1,
+                'post_status' => 'any',
+                'meta_key' => '_translation_group',
+                'meta_value' => $translation_group,
+                'suppress_filters' => false,
+            ));
+
+            // Also search in the default language specifically
+            if( empty( $original_posts ) ){
+                do_action( 'wpml_switch_language', $default_lang );
+                $original_posts = get_posts( array(
+                    'post_type' => $this->post_type,
+                    'posts_per_page' => 1,
+                    'post_status' => 'any',
+                    'meta_key' => '_translation_group',
+                    'meta_value' => $translation_group,
+                    'suppress_filters' => false,
+                ));
+                do_action( 'wpml_switch_language', $translation_lang );
+            }
+
+            if( !empty( $original_posts ) ){
+                $original_id = $original_posts[0]->ID;
+
+                // Don't link to self
+                if( $original_id != $post_id ){
+                    $trid = apply_filters( 'wpml_element_trid', null, $original_id, $element_type );
+                    $source_lang = $default_lang;
+                    GIW_Utils::log( sprintf( 'WPML: Found original post [%d] with trid [%s] for translation group [%s]', $original_id, $trid, $translation_group ) );
+                }
+            } else {
+                GIW_Utils::log( sprintf( 'WPML: No original post found for translation group [%s], setting as standalone in [%s]', $translation_group, $translation_lang ) );
+            }
+        }
+
+        // Set the language details for this post
+        do_action( 'wpml_set_element_language_details', array(
+            'element_id' => $post_id,
+            'element_type' => $element_type,
+            'trid' => $trid,
+            'language_code' => $translation_lang,
+            'source_language_code' => $source_lang,
+        ));
+
+        GIW_Utils::log( sprintf( 'WPML: Set language [%s] for post [%d]%s', $translation_lang, $post_id, $trid ? ' linked to trid [' . $trid . ']' : '' ) );
 
     }
 
@@ -259,11 +371,18 @@ class GIW_Publisher{
 
         foreach( $repo_structure as $item_slug => $item_props ){
 
+            try {
+
             GIW_Utils::log( 'At repository item - ' . $item_slug);
 
             $first_character = substr( $item_slug, 0, 1 );
             if( in_array( $first_character, array( '_', '.' ) ) ){
                 GIW_Utils::log( 'Items starting with _ . are skipped for publishing' );
+                continue;
+            }
+
+            if( $item_props[ 'type' ] == 'directory' && !empty( $this->exclude_folders ) && in_array( $item_slug, $this->exclude_folders ) ){
+                GIW_Utils::log( 'Skipping excluded folder [' . $item_slug . ']' );
                 continue;
             }
 
@@ -298,7 +417,7 @@ class GIW_Publisher{
                     $this->create_post( $directory_post, $item_slug, $index_props, $parent );
 
                 }else{
-                    
+
                     // If index posts exists for the directory
                     if( array_key_exists( 'index', $item_props[ 'items' ] ) ){
                         $index_props = $item_props[ 'items' ][ 'index' ];
@@ -311,6 +430,12 @@ class GIW_Publisher{
 
                 $this->create_posts( $item_props[ 'items' ], $directory_post );
 
+            }
+
+            } catch( \Exception $e ){
+                GIW_Utils::log( 'Error processing item [' . $item_slug . ']: ' . $e->getMessage() );
+                $this->stats[ 'posts' ][ 'failed' ]++;
+                continue;
             }
 
         }
@@ -350,6 +475,12 @@ class GIW_Publisher{
                 continue;
             }
 
+            $allowed_image_extensions = array( 'jpg', 'jpeg', 'jpe', 'png', 'gif', 'webp' );
+            if( !in_array( strtolower( $image_props[ 'file_type' ] ), $allowed_image_extensions ) ){
+                GIW_Utils::log( 'Skipping non-image file [' . $image_slug . '] with extension [' . $image_props[ 'file_type' ] . ']' );
+                continue;
+            }
+
             $image_path = $image_props[ 'rel_url' ];
 
             GIW_Utils::log( 'Starting image ' . $image_path );
@@ -364,7 +495,8 @@ class GIW_Publisher{
             $uploaded_image_id = $this->upload_image( $image_props, 0, null, 'id' );
 
             if( is_wp_error( $uploaded_image_id ) ){
-                GIW_Utils::log( 'Failed to upload image. Error [' . $uploaded_image_id->get_error_message() . ']' );
+                GIW_Utils::log( 'Failed to upload image [' . $image_path . ']. Error [' . $uploaded_image_id->get_error_message() . ']' );
+                $this->stats[ 'images' ][ 'failed' ]++;
                 continue;
             }
 
@@ -481,9 +613,17 @@ class GIW_Publisher{
         $folder = trim( $this->folder );
 
         if( $folder != '/' && !empty( $folder ) ){
-            if( array_key_exists( $folder, $repo_structure ) ){
-                $repo_structure = $repo_structure[ $folder ][ 'items' ];
-            }else{
+            $parts = array_filter( explode( '/', $folder ) );
+            $valid = true;
+            foreach( $parts as $part ){
+                if( array_key_exists( $part, $repo_structure ) && $repo_structure[ $part ][ 'type' ] == 'directory' ){
+                    $repo_structure = $repo_structure[ $part ][ 'items' ];
+                } else {
+                    $valid = false;
+                    break;
+                }
+            }
+            if( !$valid ){
                 return array(
                     'result' => 0,
                     'message' => sprintf( 'No folder %s exists in the repository', $folder ),
@@ -502,6 +642,14 @@ class GIW_Publisher{
         GIW_Utils::log( 'Allowed file types - ' . implode( ', ', $this->allowed_file_types ) );
         $this->create_posts( $repo_structure, 0 );
         GIW_Utils::log( '++++++++++ Done ++++++++++' );
+
+        GIW_Utils::log( sprintf( 'SYNC SUMMARY: Posts: %d new, %d updated, %d failed | Images: %d uploaded, %d failed',
+            count( $this->stats[ 'posts' ][ 'new' ] ),
+            count( $this->stats[ 'posts' ][ 'updated' ] ),
+            $this->stats[ 'posts' ][ 'failed' ],
+            count( $this->stats[ 'images' ][ 'uploaded' ] ),
+            $this->stats[ 'images' ][ 'failed' ]
+        ));
 
         $message = 'Successfully published posts';
         $result = 1;

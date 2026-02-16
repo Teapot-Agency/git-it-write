@@ -226,6 +226,20 @@ class GIW_Admin{
         echo '</tr>';
 
         echo '<tr>';
+            echo '<td>Exclude folders</td>';
+            echo '<td><input type="text" name="giw_exclude_folders" value="' . esc_attr( $values[ 'exclude_folders' ] ) . '" />';
+            echo '<p class="description">Comma-separated folder names to skip when publishing (e.g. <code>en,cs,sk</code>). Useful for excluding language subdirectories handled by separate repo configs.</p>';
+            echo '</td>';
+        echo '</tr>';
+
+        echo '<tr>';
+            echo '<td>Language</td>';
+            echo '<td><input type="text" name="giw_language" value="' . esc_attr( $values[ 'language' ] ) . '" placeholder="e.g. sk, en, cs" />';
+            echo '<p class="description">Language code for WPML integration. Posts from this repo config will be assigned this language. Leave blank to use the WPML default language.</p>';
+            echo '</td>';
+        echo '</tr>';
+
+        echo '<tr>';
             echo '<td>Post type to publish to</td>';
             echo '<td>' . GIW_utils::post_type_selector( 'giw_post_type', $values[ 'post_type' ] );
             echo '<p class="description">The post type to publish the posts under. Hierarchial post types are preferred as they support level by level pages.</p>';

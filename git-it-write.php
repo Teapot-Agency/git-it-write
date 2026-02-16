@@ -1,14 +1,14 @@
 <?php
 /*
 Plugin Name: Git it Write
-Plugin URI: https://www.aakashweb.com/wordpress-plugins/git-it-write/
-Description: Publish markdown files present in a Github repository as posts to WordPress automatically
-Author: Aakash Chakravarthy
-Author URI: https://www.aakashweb.com/
-Version: 2.0
+Plugin URI: https://github.com/Teapot-Agency/git-it-write
+Description: Publish markdown files present in a Github repository as posts to WordPress automatically. Supports multilingual publishing with WPML integration.
+Author: Patrik Magos
+Author URI: https://www.teapot.sk
+Version: 2.2
 */
 
-define( 'GIW_VERSION', '2.0' );
+define( 'GIW_VERSION', '2.2' );
 define( 'GIW_PATH', plugin_dir_path( __FILE__ ) ); // All have trailing slash
 define( 'GIW_ADMIN_URL', trailingslashit( plugin_dir_url( __FILE__ ) . 'admin' ) );
 
@@ -45,6 +45,8 @@ final class Git_It_Write{
             'post_type' => '',
             'post_author' => 1,
             'content_template' => '%%content%%',
+            'exclude_folders' => '',
+            'language' => '',
             'last_publish' => 0
         );
     }

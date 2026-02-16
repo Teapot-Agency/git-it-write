@@ -8,7 +8,7 @@ License: GPLv2 or later
 Requires PHP: 5.3
 Requires at least: 4.4
 Tested up to: 6.6.1
-Stable tag: 2.0
+Stable tag: 2.2
 
 Publish markdown files present in a GitHub repository as posts to WordPress automatically
 
@@ -66,6 +66,9 @@ Then below posts will be created like below (if permalinks are configured and th
 * Publish to any post type.
 * Posts are published in hierarchial manner if they are under folders. Example: a file `dir1/hello.md` will be posted as `dir1/hello/` in WordPress if the post type supports hierarchy.
 * Support for post metadata like setting tags, categories, custom fields.
+* WPML multilingual support — assign language per repository config and link translations automatically.
+* Exclude specific folders from publishing (useful for language subdirectories).
+* Nested folder paths supported (e.g. `blog/en` as a publish folder).
 
 ### ℹ Note
 
@@ -141,6 +144,15 @@ Yes, if you want to pull posts from a folder in a repository then you can specif
 
 
 ## Changelog
+
+### 2.2
+* New: WPML integration — posts are automatically assigned a language and linked as translations via `_translation_group` custom field.
+* New: `exclude_folders` setting — comma-separated folder names to skip during publishing (e.g. language subdirectories `en,cs,sk`).
+* New: `language` setting — language code per repository config for WPML language assignment.
+* Fix: Nested folder navigation — folder paths like `blog/en` now work correctly (previously only single-level folders were supported).
+
+### 2.1
+* Fork by Patrik Magos with updated author info.
 
 ### 2.0
 * Fix: Disable inline URLs from being converted to link tags. (Thanks to @SienciLabs for the report)
